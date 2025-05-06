@@ -23,8 +23,8 @@ import (
 type Daggerverse struct{}
 
 // Returns a container that echoes whatever string argument is provided
-func (m *Daggerverse) ContainerEcho(stringArg string) *dagger.Container {
-	return dag.Container().From("alpine:latest").WithExec([]string{"echo", stringArg})
+func (m *Daggerverse) ContainerEcho(ctx context.Context, stringArg string) (string, error) {
+	return dag.Container().From("alpine:latest").WithExec([]string{"echo", stringArg}).Stdout(ctx)
 }
 
 // Returns lines that match a pattern in the files of the provided Directory
@@ -36,5 +36,3 @@ func (m *Daggerverse) GrepDir(ctx context.Context, directoryArg *dagger.Director
 		WithExec([]string{"grep", "-R", pattern, "."}).
 		Stdout(ctx)
 }
-
-
