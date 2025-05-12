@@ -3,5 +3,17 @@
   "engineVersion": "v0.18.6",
   "sdk": {
     "source": "go"
-  }
+  },
+  "dependencies": [
+    {
+      "name": "containerd",
+      "source": "github.com/levlaz/daggerverse/containerd@containerd/v0.1.2",
+      "pin": "abcd1a95cef14ad336ca21a9ab836869582617bb"
+    },
+    {
+      "name": "k3s",
+      "source": "github.com/marcosnils/daggerverse/k3s@v0.0.3",
+      "pin": "89364f38eed5f3eb516a12a51ac3746f44d2ac42"
+    }
+  ]
 }

@@ -22,6 +22,7 @@ require (
 	go.opentelemetry.io/proto/otlp v1.3.1
 	golang.org/x/sync v0.12.0
 	google.golang.org/grpc v1.71.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (

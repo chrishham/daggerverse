@@ -3,8 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"regexp"
-	"strings"
 	"time"
 
 	"github.com/chrishham/daggerverse/internal/dagger"
@@ -12,44 +10,15 @@ import (
 
 type Daggerverse struct{}
 
-// Returns a container with the input repo cloned
-func (m *Daggerverse) GetContainerFromRepo(
-	ctx context.Context,
-	pat,
-	gitUserEmail,
-	gitUserName,
-	environment,
-	project,
-	repo,
-	branch,
-	namespace,
-	aksFolderToCreate,
-	parentApp string,
-) *dagger.Container {
-	repoUrl := fmt.Sprintf("https://%s@dev.azure.com/chamaletsoschrist/%s/_git/%s", pat, project, repo)
-	aksYamlRepoUrl := fmt.Sprintf("https://%s@dev.azure.com/chamaletsoschrist/DevOps_Private/_git/AKS", pat)
+// Creates and configures Helm charts with CSI driver integration for AKS deployments.
+func (m *Daggerverse) CreateHelmManifestsCSI(
+	ctx context.Context, azureDevopsPat *dagger.Secret, gitUserEmail, gitUserName, environment, project,
+	repo, branch, namespace, aksFolderToCreate, parentApp string) *dagger.Container {
 
-	repoContainer := dag.Container().
-		From("alpine:latest").
-		WithExec([]string{"apk", "add", "git"}).
-		WithExec([]string{"git", "config", "--global", "user.email", gitUserEmail}).
-		WithExec([]string{"git", "config", "--global", "user.name", gitUserName}).
-		WithEnvVariable("CACHEBUSTER", time.Now().String()).
-		WithExec([]string{"git", "clone", aksYamlRepoUrl}).
-		WithExec([]string{"git", "clone", repoUrl}).
-		WithWorkdir(repo)
+	// Setup repo url for cloning
+	repoURL := fmt.Sprintf("https://dev.azure.com/chamaletsoschrist/%s/_git/%s", project, repo)
 
-	defaultBranch, _ := repoContainer.
-		WithExec([]string{
-			"sh", "-c",
-			"git remote show origin | grep 'HEAD branch' | cut -d' ' -f5",
-		}).Stdout(ctx)
-	fmt.Println("defaultBranch :", defaultBranch)
-	// Read the original file content
-	fileContent, _ := repoContainer.WithExec([]string{"cat", "/AKS/01_parent_file.yaml"}).Stdout(ctx)
-
-	// Replace all variables directly using the function parameters
-
+	// Create the variables map for yaml parameters substitutions
 	variables := map[string]string{
 		"parentApp":   parentApp,
 		"environment": environment,
@@ -57,50 +26,40 @@ func (m *Daggerverse) GetContainerFromRepo(
 		"repo":        repo,
 		"branch":      branch,
 		"namespace":   namespace,
-		"repoUrl":     repoUrl,
-		// Add any other variables you need to replace
+		"repoURL":     repoURL,
 	}
 
-	for key, value := range variables {
-		fileContent = strings.ReplaceAll(fileContent, "$("+key+")", value)
-	}
+	// Working container with all the required packages installed
+	container := dag.Container().
+		From("chrishham/ubuntu-24-04-azure:latest").
+		WithSecretVariable("AZURE_DEVOPS_PAT", azureDevopsPat).
+		// Configure git
+		WithExec([]string{"git", "config", "--global", "user.email", gitUserEmail}).
+		WithExec([]string{"git", "config", "--global", "user.name", gitUserName}).
+		// Disable cache
+		WithEnvVariable("CACHEBUSTER", time.Now().String()).
+		// Clone repos into the container
+		WithExec([]string{"bash", "-c", "git clone https://$AZURE_DEVOPS_PAT@dev.azure.com/chamaletsoschrist/DevOps_Private/_git/AKS"}).
+		WithExec([]string{"bash", "-c", "git clone https://$AZURE_DEVOPS_PAT@dev.azure.com/chamaletsoschrist/" + project + "/_git/" + repo}).
+		// Cd to repo and create required folders
+		WithWorkdir(repo).
+		WithExec([]string{"mkdir", "-p", aksFolderToCreate + "/templates"})
 
+	defaultBranch := getDefaultBranch(ctx, container)
+	fmt.Println("defaultBranch :", defaultBranch)
+
+	// Create argocd parent file
 	parentFile := fmt.Sprintf("/%s/%s/%s-%s.yaml", repo, aksFolderToCreate, parentApp, environment)
-	repoContainer = repoContainer.
-		WithExec([]string{"mkdir", "-p", aksFolderToCreate}).
-		WithNewFile("/tmp/modified_file.yaml", fileContent).
-		WithExec([]string{"cp", "/tmp/modified_file.yaml", parentFile})
-		// WithExec([]string{"cp", "/AKS/01_parent_file.yaml", parentFile})
+	fmt.Printf("Creating parent application file: %s", parentFile)
+	container = replaceValuesAndCopyFile(ctx, container, variables, "/AKS/01_parent_file.yaml", parentFile)
+	container = commitAndPush(container, branch, defaultBranch, `Adding application file for `+parentApp)
 
-	repoContainer = CommitAndPush(repoContainer, branch, defaultBranch, `Adding application file for `+parentApp)
+	// Generate the config maps from the json file
+	container = container.
+		WithWorkdir(aksFolderToCreate + "/templates").
+		WithExec([]string{"python3", "/AKS/python_scripts/configmap_generator.py", "-f", "/AKS/settings/qa/api/cbs-transactions-extra-api.json"})
 
-	return repoContainer
-}
+	container = commitAndPush(container, branch, defaultBranch, `Adding ConfigMap files for `+parentApp)
 
-func CommitAndPush(container *dagger.Container, branch, defaultBranch, commitMsg string) *dagger.Container {
-	return container.WithExec([]string{"git", "checkout", branch}).
-		WithExec([]string{"git", "pull", "origin", branch}).
-		WithExec([]string{"git", "add", "-A", "."}).
-		WithExec([]string{"sh", "-c", `
-if [[ -n "$(git status -s)" ]]; then
-  git commit -m "` + commitMsg + `"
-  git push origin ` + defaultBranch + `
-else
-  echo "No changes to commit"
-fi`})
-}
-
-// substituteVars replaces all $(varName) in input with corresponding values from vars map.
-func substituteVars(input string, vars map[string]string) string {
-	// Regex to match $(varName)
-	re := regexp.MustCompile(`\$\(([^)]+)\)`)
-
-	// Replace all matches with corresponding values from map
-	return re.ReplaceAllStringFunc(input, func(match string) string {
-		key := re.FindStringSubmatch(match)[1]
-		if val, ok := vars[key]; ok {
-			return val
-		}
-		return match // leave untouched if not found
-	})
+	return container
 }
