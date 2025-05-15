@@ -31,7 +31,7 @@ func (m *Daggerverse) CreateAndPublishWorkingImage(
 			From("ubuntu:24.04").
 			// Install required packages
 			WithExec([]string{"apt-get", "update"}).
-			WithExec([]string{"apt-get", "install", "-y", "git", "curl", "wget", "unzip", "python3", "python3-yaml"}).
+			WithExec([]string{"apt-get", "install", "-y", "git", "curl", "jq" ,"wget", "unzip", "python3", "python3-yaml"}).
 			// Install Azure CLI, Kubectl, Kubelogin and Helm
 			WithExec([]string{"bash", "-c", "curl -sL https://gist.githubusercontent.com/chrishham/283bd8928a42eb5818ede2f8ee4ef6fe/raw/47227f94016fd80b471d94565ce3a8900123541b/gistfile1.txt | bash"})
 

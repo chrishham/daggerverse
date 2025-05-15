@@ -10,9 +10,11 @@ dagger call create-helm-manifests-csi \
   --environment=$environment \
   --project=$project \
   --repo=$repo \
+  --appName=$appName \
   --branch=$branch \
   --namespace=$namespace \
   --aksFolderToCreate=$aksFolderToCreate \
+  --aksFilePath=$aksFilePath \
   --parentApp=$parentApp
 ```
 
@@ -20,6 +22,15 @@ dagger call create-helm-manifests-csi \
 ```sh
 create-helm-manifests-csi $PAT $gitUserEmail "$gitUserName" $environment $project $repo $branch $namespace $aksFolderToCreate $parentApp | terminal 
 ```
+
+# TODO
+
+* extract all variables from jsonPath
+* handle errors
+* pretty format dagger functions output with sections and fmt.println statements
+* spin up a k3s cluster and install the helm chart 
+helm upgrade --install my-release . --namespace my-namespace --create-namespace
+
 
 ```sh
 az login --service-principal -u $AZURE_CLIENT_ID -p $AZURE_CLIENT_SECRET --tenant $AZURE_TENANT_ID
