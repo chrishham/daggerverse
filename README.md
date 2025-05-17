@@ -7,27 +7,13 @@ dagger call create-helm-manifests-csi \
   --azureDevopsPat=env://AZURE_DEVOPS_PAT \
   --gitUserEmail=$gitUserEmail \
   --gitUserName="$gitUserName" \
-  --environment=$environment \
-  --project=$project \
-  --repo=$repo \
-  --appName=$appName \
-  --branch=$branch \
-  --namespace=$namespace \
-  --aksFolderToCreate=$aksFolderToCreate \
-  --aksFilePath=$aksFilePath \
-  --parentApp=$parentApp
-```
-
-# Dagger Shell
-```sh
-create-helm-manifests-csi $PAT $gitUserEmail "$gitUserName" $environment $project $repo $branch $namespace $aksFolderToCreate $parentApp | terminal 
+  --jsonPath="qa/flink/cbs-streaming-lien.json"
+	# --jsonPath="qa/api/cbs-transactions-extra-api.json"
 ```
 
 # TODO
 
-* extract all variables from jsonPath
-* handle errors
-* pretty format dagger functions output with sections and fmt.println statements
+* proper error handling
 * spin up a k3s cluster and install the helm chart 
 helm upgrade --install my-release . --namespace my-namespace --create-namespace
 
@@ -54,3 +40,6 @@ if OUTPUT=$(az identity federated-credential create \
   echo "Successfully created federated credential"
 
   az aks get-credentials --resource-group $(resourceGroupName) --name $(clusterName) --overwrite-existing
+
+pool:
+  name: OCI_AGENT_POOL

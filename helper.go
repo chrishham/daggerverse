@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -31,7 +32,7 @@ func (m *Daggerverse) CreateAndPublishWorkingImage(
 			From("ubuntu:24.04").
 			// Install required packages
 			WithExec([]string{"apt-get", "update"}).
-			WithExec([]string{"apt-get", "install", "-y", "git", "curl", "jq" ,"wget", "unzip", "python3", "python3-yaml"}).
+			WithExec([]string{"apt-get", "install", "-y", "git", "curl", "jq", "wget", "unzip", "python3", "python3-yaml"}).
 			// Install Azure CLI, Kubectl, Kubelogin and Helm
 			WithExec([]string{"bash", "-c", "curl -sL https://gist.githubusercontent.com/chrishham/283bd8928a42eb5818ede2f8ee4ef6fe/raw/47227f94016fd80b471d94565ce3a8900123541b/gistfile1.txt | bash"})
 
@@ -70,8 +71,8 @@ func (m *Daggerverse) TestImage(ctx context.Context, dockerHubToken string) stri
 // ************************
 // Helper functions
 // ************************
-func commitAndPush(container *dagger.Container, branch, defaultBranch, commitMsg string) *dagger.Container {
-	return container.WithExec([]string{"git", "checkout", branch}).
+func commitAndPush(ctx context.Context, container *dagger.Container, branch, defaultBranch, commitMsg string) *dagger.Container {
+	container = container.WithExec([]string{"git", "checkout", branch}).
 		WithExec([]string{"git", "pull", "origin", branch}).
 		WithExec([]string{"git", "add", "-A", "."}).
 		WithExec([]string{"bash", "-c", `
@@ -81,11 +82,14 @@ if [[ -n "$(git status -s)" ]]; then
 else
   echo "No changes to commit"
 fi`})
+	printStdout(ctx, container)
+
+	return container
 }
 
 func replaceValuesAndCopyFile(ctx context.Context, container *dagger.Container, variables map[string]string, srcFile, destFile string) *dagger.Container {
-	fileContent, _ := container.WithExec([]string{"cat", srcFile}).Stdout(ctx)
-
+	fileContent, _ := container.File(srcFile).Contents(ctx)
+	fmt.Println("Copying ", srcFile)
 	for key, value := range variables {
 		fileContent = strings.ReplaceAll(fileContent, "$("+key+")", value)
 	}
@@ -104,31 +108,81 @@ func getDefaultBranch(ctx context.Context, container *dagger.Container) string {
 	return defaultBranch
 }
 
-// func (m *Daggerverse) Example(name string) *dagger.K3S {
-// 	return dag.
-// 		K3S(name)
-// }
-
-// starts a k3s server and deploys a helm chart
-func (m *Daggerverse) K3S(ctx context.Context) (string, error) {
-	k3s := dag.K3S("test")
-	kServer := k3s.Server()
-
-	kServer, err := kServer.Start(ctx)
+// LoadJSONAsEnvMap reads a JSON file from a container path and returns a map[string]string
+func LoadJSONAsEnvMap(ctx context.Context, container *dagger.Container, jsonPath string) (map[string]string, error) {
+	// Read contents of the JSON file inside the container
+	contents, err := container.File(jsonPath).Contents(ctx)
 	if err != nil {
-		return "", err
+		return nil, fmt.Errorf("failed to read file %s: %w", jsonPath, err)
 	}
 
-	ep, err := kServer.Endpoint(ctx, dagger.ServiceEndpointOpts{Port: 80, Scheme: "http"})
-	if err != nil {
-		return "", err
+	// Parse it as generic map
+	var raw map[string]interface{}
+	if err := json.Unmarshal([]byte(contents), &raw); err != nil {
+		return nil, fmt.Errorf("invalid JSON: %w", err)
 	}
 
-	return dag.Container().From("alpine/helm").
-		WithExec([]string{"apk", "add", "kubectl"}).
-		WithEnvVariable("KUBECONFIG", "/.kube/config").
-		WithFile("/.kube/config", k3s.Config(true)).
-		WithExec([]string{"helm", "upgrade", "--install", "--force", "--wait", "--debug", "nginx", "oci://registry-1.docker.io/bitnamicharts/nginx"}).
-		WithExec([]string{"sh", "-c", "while true; do curl -sS " + ep + " && exit 0 || sleep 1; done"}).Stdout(ctx)
+	// Normalize values to strings
+	values := make(map[string]string)
+	for k, v := range raw {
+		switch val := v.(type) {
+		case string:
+			values[k] = val
+		default:
+			jsonVal, err := json.Marshal(val)
+			if err != nil {
+				return nil, fmt.Errorf("could not marshal value for key %s: %w", k, err)
+			}
+			values[k] = string(jsonVal)
+		}
+	}
 
+	return values, nil
 }
+
+func copyHelmFiles(ctx context.Context, container *dagger.Container, variables map[string]string) (*dagger.Container, error) {
+	repo := variables["repo"]
+	aksPath := variables["aksFilePath"]
+
+	helmBase := "/AKS/aks_manifests/helm"
+	files, err := getFilesUnderDir(ctx, container, helmBase)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, relPath := range files {
+		src := helmBase + "/" + relPath
+		dest := fmt.Sprintf("/%s/%s/%s", repo, aksPath, relPath)
+		container = replaceValuesAndCopyFile(ctx, container, variables, src, dest)
+	}
+
+	return container, nil
+}
+
+// helper to recursively collect all file paths under a dir in a container
+func getFilesUnderDir(ctx context.Context, container *dagger.Container, dir string) ([]string, error) {
+	fileList, err := container.Directory(dir).Glob(ctx, "**/*")
+	if err != nil {
+		return nil, fmt.Errorf("failed to list files under %s: %w", dir, err)
+	}
+
+	var files []string
+	for _, path := range fileList {
+		if strings.HasSuffix(path, "/") {
+			continue // skip directories
+		}
+
+		fullPath := dir + "/" + path
+		_, err := container.File(fullPath).Contents(ctx)
+		if err == nil {
+			files = append(files, path)
+		}
+	}
+	return files, nil
+}
+func printStdout(ctx context.Context, container *dagger.Container) {
+	stdout, _ := container.Stdout(ctx)
+	fmt.Println(stdout)
+}
+
+
